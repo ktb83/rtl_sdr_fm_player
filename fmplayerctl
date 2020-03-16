@@ -6,6 +6,6 @@ then
   /usr/bin/xdotool search --name 'RTL-SDR FM Player' windowactivate
 else
   # If is not running, then execute it
-  /home/pi/software/rtl_sdr_fm_player/rtl_sdr_fm_player &
+  /home/pi/software/github/rtl_sdr_fm_player/rtl_sdr_fm_player &
 fi
 exit 0
