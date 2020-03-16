@@ -1,0 +1,11 @@
+#!/bin/sh
+# Check if 7ways is running
+if [ "$(pidof rtl_sdr_fm_player)" ]
+then
+  # If it is running, then switch to the 7ways window
+  /usr/bin/xdotool search --name 'RTL-SDR FM Player' windowactivate
+else
+  # If is not running, then execute it
+  /home/pi/software/rtl_sdr_fm_player/rtl_sdr_fm_player &
+fi
+exit 0

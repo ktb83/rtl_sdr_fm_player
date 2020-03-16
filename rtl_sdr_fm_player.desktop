@@ -2,8 +2,8 @@
 [Desktop Entry]
 Name=RTL-SDR FM Player
 Comment=FM radio player
-Icon=/home/pi/rtl_sdr_fm_player/desktop_icon.png
-Exec=sudo python3 /home/pi/rtl_sdr_fm_player/player.py
+Icon=/home/pi/software/github/rtl_sdr_fm_player/desktop_icon.png
+Exec=/home/pi/software/github/rtl_sdr_fm_player/fmplayerctl
 Type=Application
 Encoding=UTF-8
 Terminal=false
