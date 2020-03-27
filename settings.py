@@ -1,10 +1,26 @@
 """Settings module for rtl_sdr_fm_player"""
 import configparser
 import os
+import json
+
 
 def app_res_path(the_file):
     """Return application resource path for given file"""
     return os.path.join(os.path.dirname(__file__), the_file)
+
+
+def permissive_json_loads(text):
+    """Progressively loads and fixes mis-escaped json objects"""
+    while True:
+        try:
+            data = json.loads(text)
+        except json.decoder.JSONDecodeError as exc:
+            if exc.msg == 'Invalid \\escape':
+                text = text[:exc.pos] + '\\' + text[exc.pos:]
+            else:
+                raise
+        else:
+            return data
 
 
 def add_station(freq):
@@ -37,6 +53,12 @@ def update_stations(preset_list):
     new_stations = get_stations()
     new_frequencies = list(stations.keys())
     return (new_stations, new_frequencies)
+
+
+def save_session(frequency):
+    """Save session"""
+    config.set('Session', 'frequency', frequency)
+    write_config()
 
 
 def write_config():

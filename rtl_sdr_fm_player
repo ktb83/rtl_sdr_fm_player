@@ -1,29 +1,17 @@
 #!/usr/bin/python3
 """This program provides an FM radio GUI."""
-import tkinter as tk
 import subprocess
 import time
 import threading
 import socket
-import json
 import re
+
+import tkinter as tk
 #pylint: disable=no-name-in-module
 from setproctitle import setproctitle
 #pylint: enable=no-name-in-module
 from settings import *
 
-def permissive_json_loads(text):
-    """Progressively loads and fixes mis-escaped json objects"""
-    while True:
-        try:
-            data = json.loads(text)
-        except json.decoder.JSONDecodeError as exc:
-            if exc.msg == 'Invalid \\escape':
-                text = text[:exc.pos] + '\\' + text[exc.pos:]
-            else:
-                raise
-        else:
-            return data
 
 class Marquee(tk.Canvas):  # pylint: disable=too-many-ancestors
     """A scrolling text marquee using tkinter canvas widget"""
@@ -315,7 +303,6 @@ class PlayerApp:
                 self.player_gui.set_preset_rb_var(frequency)
             else:
                 self.player_gui.set_preset_rb_var(None)
-            print(p_string)
             self.status['Stop'] = False
         else:
             print('stopping play_thread')
@@ -418,6 +405,7 @@ class PlayerApp:
         preset_list = []
         for num in range(1, 9):
             preset_list.append(master.nametowidget('pb' + str(num)).cget('text'))
+        self.player_gui.set_preset_list(preset_list)
         update_stations(preset_list)
         self.frequencies = preset_list
 
@@ -454,6 +442,7 @@ class PlayerApp:
         self.stop()
         subprocess.call('rm -r ' + self.temp_dir, shell=True)
         time.sleep(1)
+        save_session(self.current_freq)
         write_config()
         if self.status['using_server']:
             subprocess.run(['killall', 'rtl_fm_streamer'])
@@ -954,8 +943,13 @@ class PlayerGUI:
         """Return preset list"""
         return self.data['preset_list']
 
+    def set_preset_list(self, preset_list):
+        """Set preset list"""
+        self.data['preset_list'] = preset_list
+
     def set_preset_rb_var(self, frequency, pbn=None):
         """Set preset radio button variable"""
+        print('called set_preset_rb_var ' + str(pbn) + ' ' + str(frequency))
         if pbn is None and frequency in self.data['preset_list']:
             self.data['preset_rb_var'].set(
                 'pb' + str(self.data['preset_list'].index(frequency) + 1) + frequency)
@@ -963,6 +957,7 @@ class PlayerGUI:
             self.data['preset_rb_var'].set('pb0' + str(frequency))
         else:
             self.data['preset_rb_var'].set(pbn + frequency)
+
 
 def main():
     """Main application"""
