@@ -5,6 +5,7 @@ import time
 import threading
 import socket
 import re
+from collections import deque
 
 import tkinter as tk
 #pylint: disable=no-name-in-module
@@ -898,23 +899,23 @@ class PlayerGUI:
         """Update displayed Radio Text from RDS"""
         if not self.app.get_using_server() and use_rds:
             previous_rt = self.data['radio_text']
-            try:
-                rds_rt_json_lines = subprocess.check_output(['grep', '\"radiotext\"',
-                                                             self.paths['rds_log']])
-            except subprocess.CalledProcessError as exc:
-                if exc.returncode > 1:
-                    raise
-                rds_rt_json_lines = ''
-            if rds_rt_json_lines != '':
-                rds_rt_json = rds_rt_json_lines.decode('utf-8').splitlines()[-1]
+            rds_rt_json_list = []
+            with open(self.paths['rds_log'], 'r') as rdslf:
+                for line in rdslf:
+                    if '"radiotext"' in line:
+                        rds_rt_json_list.append(line)
+            if len(rds_rt_json_list) > 0:
+                rds_rt_json = rds_rt_json_list[-1]
                 print(rds_rt_json)
-                rds_rt_data = permissive_json_loads(rds_rt_json)
+                rds_rt_data = json.loads(rds_rt_json)
                 self.data['radio_text'] = rds_rt_data[u'radiotext'].strip()
             if self.data['radio_text'] != previous_rt:
                 self.widgets['rt_marquee'].update_text(new_text='%s' % self.data['radio_text'])
-            subprocess.call(
-                'echo "$(tail -n500 ' + self.paths['rds_log'] + ')" > ' + self.paths['rds_log'],
-                shell=True)
+            with open(self.paths['rds_log']) as rdslf:
+                last_500 = deque(rdslf, 500)
+            with open(self.paths['rds_log'], 'w') as rdslf:
+                for line in last_500:
+                    rdslf.write(line)
         else:
             if self.app.get_current_freq() in self.data['stations']:
                 self.widgets['rt_marquee'].update_text(

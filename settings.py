@@ -90,8 +90,9 @@ if use_server:
 else:
     if use_rds:
         play_string = (
-            'truncate -s0 rds_log_path;%s | redsea -u -e 2>> rds_log_path | %s' % (
+            'truncate -s0 rds_log_path;%s | %s 2>> rds_log_path | %s' % (
                 config.get('rtl_fm', 'rtl_fm command'),
+                config.get('rtl_fm', 'redsea command'),
                 config.get('rtl_fm', 'player command')))
     else:
         play_string = (
