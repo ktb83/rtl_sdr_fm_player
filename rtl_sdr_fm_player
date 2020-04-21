@@ -1,317 +1,169 @@
 #!/usr/bin/python3
 """This program provides an FM radio GUI."""
-import subprocess
-import time
-import threading
-import socket
-import re
 from collections import deque
+import json
+import re
+import socket
+import subprocess
+import threading
+import time
 
 import tkinter as tk
+from tkinter import ttk
 #pylint: disable=no-name-in-module
 from setproctitle import setproctitle
 #pylint: enable=no-name-in-module
-from settings import *
-
-
-class Marquee(tk.Canvas):  # pylint: disable=too-many-ancestors
-    """A scrolling text marquee using tkinter canvas widget"""
-    def __init__(self, parent, text, font=None, the_args=None):
-        if the_args is None:
-            the_args = {'margin': 2, 'borderwidth': 0, 'fps': 30,
-                        'width': 265, 'height': 22, 'highlightthickness': 0,
-                        'relief': 'flat', 'font': None, 'fgd': None, 'bgd': None,
-                        'highlightcolor': None,
-                        'highlightbackground': None}
-        tk.Canvas.__init__(self, parent, borderwidth=the_args['borderwidth'],
-                           relief=the_args['relief'], bg=the_args['bgd'],
-                           width=the_args['width'], height=the_args['height'],
-                           highlightthickness=the_args['highlightthickness'],
-                           highlightcolor=the_args['highlightcolor'],
-                           highlightbackground=the_args['highlightbackground'])
-        self.fps = the_args['fps']
-        self.font = font
-        self.fgd = the_args['fgd']
-        self.text = self.create_text(0, -1000, fill=self.fgd, font=self.font,
-                                     text=text, anchor="w", tags=("text",))
-        self.animate()
-
-    def update_text(self, new_text):
-        """Update marquee text"""
-        self.delete(self.text)
-        self.text = self.create_text(0, -1000, fill=self.fgd, font=self.font,
-                                     text=new_text, anchor="w", tags=("text",))
-
-    def animate(self):
-        """Scroll the marquee text"""
-        (x_0, y_0, x_1, _y_1) = self.bbox("text")
-        if x_1 < 0 or y_0 < 0:
-            x_0 = self.winfo_width()
-            y_0 = int(self.winfo_height() / 2)
-            self.coords("text", x_0, y_0)
-        else:
-            self.move("text", -1, 0)
-        self.after_id = self.after(int(1000/self.fps), self.animate)
-
-
-class PresetButton(tk.Radiobutton):  # pylint: disable=too-many-ancestors
-    """A custom radio button using tkinter Radiobutton widget"""
-    def __init__(self, parent, args=None):
-        if args is None:
-            args = {'w': 5, 'bw': 0, 'sc': 'black', 'fg': 'white', 'bg': 'gray11',
-                    'afg': 'white', 'abg': 'gray11', 'hlc': 'gray11', 'hlbg': 'gray11',
-                    'txt': '', 'val': '', 'name': '', 'var': None, 'sp_cmd': None, 'lp_cmd': None}
-        tk.Radiobutton.__init__(
-            self, parent, width=args['w'], borderwidth=args['bw'],
-            selectcolor=args['sc'], fg=args['fg'], bg=args['bg'],
-            activeforeground=args['afg'], activebackground=args['abg'],
-            highlightcolor=args['hlc'], highlightbackground=args['hlbg'],
-            name=args['name'], text=args['txt'], value=args['val'], variable=args['var'])
-        self.short_press_cmd = args.get('sp_cmd', None)
-        self.long_press_cmd = args.get('lp_cmd', None)
-        self.press_time = None
-        self.release_time = None
-        self.after_id = None
-        self.parent = parent
-        self.bind("<ButtonPress-1>", self._on_press)
-        self.bind("<ButtonRelease-1>", self._on_release)
-
-    def _on_press(self, event):
-        del event  # unused
-        self.press_time = time.time()
-
-    def _on_release(self, event):
-        del event  # unused
-        self.release_time = time.time()
-        if self.release_time - self.press_time > 2:
-            if self.long_press_cmd is not None:
-                self.long_press_cmd()
-        else:
-            if self.short_press_cmd is not None:
-                self.short_press_cmd()
-
-    def set_short_press_cmd(self, cmd):
-        """Set short press command"""
-        self.short_press_cmd = cmd
-
-    def set_long_press_cmd(self, cmd):
-        """Set long press command"""
-        self.long_press_cmd = cmd
-
-
-class RoundedButton(tk.Canvas):  # pylint: disable=too-many-ancestors
-    """A custom rounded-corner button using tkinter canvas widget"""
-    def __init__(self, parent, args=None):
-        if args is None:
-            args = {'width': 64, 'height': 64, 'cornerradius': 8,
-                    'padding': 0, 'color': 'black', 'bg': 'gray11', 'image': None,
-                    'press_command': None, 'release_command': None,
-                    'repeatdelay': None, 'repeatinterval': None}
-        tk.Canvas.__init__(self, parent, borderwidth=0, selectborderwidth=0,
-                           insertwidth=0, relief="flat", highlightthickness=0,
-                           bg=args['bg'])
-        self.press_command = args.get('press_command', None)
-        self.release_command = args.get('release_command', None)
-        self.repeatdelay = args.get('repeatdelay', None)
-        self.repeatinterval = args.get('repeatinterval', None)
-        self.after_id = None
-        self.parent = parent
-        self.canvas_back = None
-        if args['cornerradius'] > 0.5 * args['width']:
-            print("Error: cornerradius is greater than width.")
-            return None
-        if args['cornerradius'] > 0.5 * args['height']:
-            print("Error: cornerradius is greater than height.")
-            return None
-        rad = 2 * args['cornerradius']
-        def shape():
-            self.create_polygon(
-                (args['padding'],
-                 args['height']-args['cornerradius']-args['padding']-1,
-                 args['padding'],
-                 args['cornerradius']+args['padding'],
-                 args['padding']+args['cornerradius'],
-                 args['padding'],
-                 args['width']-args['padding']-args['cornerradius']-1,
-                 args['padding'],
-                 args['width']-args['padding']-1,
-                 args['cornerradius']+args['padding'],
-                 args['width']-args['padding']-1,
-                 args['height']-args['cornerradius']-args['padding']-1,
-                 args['width']-args['padding']-args['cornerradius']-1,
-                 args['height']-args['padding']-1,
-                 args['padding']+args['cornerradius'],
-                 args['height']-args['padding']-1),
-                fill=args['color'], outline=args['color'], width=0)
-            self.create_arc(
-                (args['padding'], args['padding']+rad,
-                 args['padding']+rad, args['padding']),
-                start=90, extent=90,
-                fill=args['color'], outline=args['color'], width=0)
-            self.create_arc(
-                (args['width']-args['padding']-rad-1, args['padding'],
-                 args['width']-args['padding']-1, args['padding']+rad),
-                start=0, extent=90,
-                fill=args['color'], outline=args['color'], width=0)
-            self.create_arc(
-                (args['width']-args['padding']-1, args['height']-rad-args['padding']-1,
-                 args['width']-args['padding']-rad-1, args['height']-args['padding']-1),
-                start=270, extent=90,
-                fill=args['color'], outline=args['color'], width=0)
-            self.create_arc(
-                (args['padding'], args['height']-args['padding']-rad-1,
-                 args['padding']+rad, args['height']-args['padding']-1),
-                start=180, extent=90,
-                fill=args['color'], outline=args['color'], width=0)
-
-        shape()
-        (x_0, y_0, x_1, y_1) = self.bbox("all")
-        width = (x_1-x_0-3)
-        height = (y_1-y_0-3)
-        self.configure(width=width, height=height)
-        self.bind("<ButtonPress-1>", self._on_press)
-        self.bind("<ButtonRelease-1>", self._on_release)
-        if args.get('image', None) is not None:
-            bg_pos_x = (width / 2)
-            bg_pos_y = (height / 2)
-            self.canvas_back = self.create_image(bg_pos_x, bg_pos_y,
-                                                 image=args['image'])
-        return None
-
-    def _on_press(self, event):
-        del event  # unused
-        self.configure(relief="sunken")
-        if self.press_command is not None:
-            self.press_command()
-            if self.repeatdelay is not None:
-                self.after_id = self.after(self.repeatdelay, self._on_repeat)
-
-    def _on_repeat(self):
-        self.configure(relief="sunken")
-        if self.press_command is not None:
-            self.press_command()
-            if self.repeatinterval is not None:
-                self.after_id = self.after(self.repeatinterval, self._on_repeat)
-
-    def _on_release(self, event):
-        del event  # unused
-        self.configure(relief="raised")
-        if self.after_id is not None:
-            self.after_cancel(self.after_id)
-        if self.release_command is not None:
-            self.release_command()
-
-    def update_image(self, image=None):
-        """Change the button image"""
-        if image is not None:
-            self.itemconfig(self.canvas_back, image=image)
-
-
-class CPUInfo:
-    """Displays current CPU usage info in a tkinter label"""
-    def __init__(self, tk_cpu_label):
-        self.cpu_utilisation = ''
-        self.cpu_temp = ''
-        self.cpu_text = tk_cpu_label
-
-    # credit https://rosettacode.org/wiki/Linux_CPU_utilization
-    def _cpu_utilisation(self):
-        """Calculate CPU utilisation"""
-        last_idle = last_total = 0
-        while True and self.cpu_utilisation is not None:
-            with open('/proc/stat') as proc_stat:
-                fields = [float(column) for column in proc_stat.readline().strip().split()[1:]]
-            idle, total = fields[3], sum(fields)
-            idle_delta, total_delta = idle - last_idle, total - last_total
-            last_idle, last_total = idle, total
-            utilisation = 100.0 * (1.0 - idle_delta / total_delta)
-            self.cpu_utilisation = ('%5.1f%%' % utilisation)
-            time.sleep(2)
-
-    def _cpu_info(self):
-        """Update displayed CPU information"""
-        get_temp = subprocess.check_output(["vcgencmd", "measure_temp"])
-        self.cpu_temp = get_temp.decode('utf-8').lstrip('temp=').replace("'", "°")
-        self.cpu_text.config(text='CPU %s %s' % (self.cpu_temp, self.cpu_utilisation))
-        self.cpu_text.after(2000, self._cpu_info)
-
-    def start(self):
-        """Start daemon and label updater"""
-        cpu_thread = threading.Thread(target=self._cpu_utilisation)
-        cpu_thread.daemon = True
-        cpu_thread.start()
-        self._cpu_info()
-
-    def get_cpu_utilisation(self):
-        """Return CPU utilisation string"""
-        return self.cpu_utilisation
-
-    def get_cpu_temp(self):
-        """Return CPU temperature string"""
-        return self.cpu_temp
+from custom_widgets import Marquee, PresetButton, RoundedButton
+from cpu_info import CPUInfo
+from settings import app_res_path, Settings
 
 
 class PlayerApp:
     """Player Application"""
-    def __init__(self, freq_list, current_freq, extra_args=None):
+    def __init__(self, settings, extra_args=None):
         if extra_args is None:
-            extra_args = {'temp_dir': None, 'play_str':  None,
-                          'vol_down_cmd': None, 'vol_up_cmd': None,
-                          'hst': None, 'api_prt': None, 'use_srv': False}
-        self.frequencies = freq_list
-        self.current_freq = current_freq
-        self.temp_dir = extra_args['temp_dir']
+            extra_args = {'freq_list': [], 'current_freq': None, 'rtl_fm_cmd': None,
+                          'redsea_cmd': None, 'player_cmd': None, 'vol_down_cmd': None,
+                          'vol_up_cmd': None, 'vol_mute_cmd': None, 'get_vol_cmd':None,
+                          'hst': None, 'api_prt': None, 'use_srv': False, 'use_rds': False}
+        self.settings = settings
+        self.frequencies = extra_args['freq_list']
+        self.rds_deque = deque(maxlen=500)
         self.status = {
             'Stop': True, 'Muted': False, 'Tuning': 'finished',
-            'using_server': extra_args['use_srv']}
-        self.cmds = {'play_string': extra_args['play_str'],
+            'current_freq': extra_args['current_freq'],
+            'using_server': extra_args['use_srv'], 'use_rds': extra_args['use_rds']}
+        self.cmds = {'rtl_fm_cmd': extra_args['rtl_fm_cmd'],
+                     'redsea_cmd': extra_args['redsea_cmd'],
+                     'player_cmd': extra_args['player_cmd'],
                      'vol_down_cmd': extra_args['vol_down_cmd'],
-                     'vol_up_cmd': extra_args['vol_up_cmd']}
+                     'vol_up_cmd': extra_args['vol_up_cmd'],
+                     'vol_mute_cmd': extra_args['vol_mute_cmd'],
+                     'get_vol_cmd': extra_args['get_vol_cmd'], 'demux_proc': None,
+                     'rtl_fm_proc': None, 'redsea_proc': None, 'player_proc': None}
         self.api = {'host': extra_args['hst'], 'api_port': extra_args['api_prt']}
         self.player_gui = None
 
-    def play(self, p_string):
+    def _read_rds(self, process, append):
+        """Read RDS from redsea stderr"""
+        print('_read_rds thread started')
+        for line in iter(process.stderr.readline, ""):
+            if self.status['Stop']:
+                break
+            append(line)
+            if 'radiotext' in line.decode('utf-8').strip():
+                print(line.decode('utf-8').strip())
+            if 'ps' in line.decode('utf-8').strip():
+                print(line.decode('utf-8').strip())
+            #time.sleep(0.011)
+        print('_read_rds thread stopped')
+
+    def _play(self, rtl_fm_cmd, redsea_cmd, player_cmd):
         """Run external demodulator program"""
-        print('Play String  %s' % p_string)
-        proc = subprocess.Popen(p_string, shell=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE)
-        while not self.status['Stop']:
-            time.sleep(.2)
-        print('STOP: %s' % self.status['Stop'])
-        proc.terminate()
+        print('rtl_fm_cmd  %s' % rtl_fm_cmd)
+        print('redsea_cmd  %s' % redsea_cmd)
+        print('player_cmd  %s' % player_cmd)
         if self.status['using_server']:
-            subprocess.run(['killall', 'ffplay'])
+            print('using rtl_fm_server: starting player_proc')
+            self.cmds['player_proc'] = subprocess.Popen(
+                player_cmd.split(), stderr=subprocess.DEVNULL)
+        elif self.status['use_rds']:
+            self.rds_deque.clear()
+            print('using rtl_fm with rds: starting rtl_fm_proc')
+            self.cmds['rtl_fm_proc'] = subprocess.Popen(
+                rtl_fm_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('using rtl_fm with rds: starting redsea_proc')
+            self.cmds['redsea_proc'] = subprocess.Popen(
+                redsea_cmd.split(), stdin=self.cmds['rtl_fm_proc'].stdout,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            #self.cmds['demux_proc'] = subprocess.Popen(
+            #    ['stereodemux'], stdin=self.cmds['redsea_proc'].stdout, stdout=subprocess.PIPE)
+            print('using rtl_fm with rds: starting player_proc')
+            self.cmds['player_proc'] = subprocess.Popen(
+                player_cmd.split(), stdin=self.cmds['redsea_proc'].stdout, stderr=subprocess.DEVNULL)
+            read_rds_thread = threading.Thread(
+                target=self._read_rds, args=(self.cmds['redsea_proc'], self.rds_deque.append))
+            read_rds_thread.daemon = True
+            read_rds_thread.start()
         else:
-            subprocess.run(['killall', '-s', 'SEGV', 'rtl_fm'])
+            print('using rtl_fm: starting rtl_fm_proc')
+            self.cmds['rtl_fm_proc'] = subprocess.Popen(
+                rtl_fm_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('using rtl_fm: starting player_proc')
+            self.cmds['player_proc'] = subprocess.Popen(
+                player_cmd.split(), stdin=self.cmds['rtl_fm_proc'].stdout, stderr=subprocess.DEVNULL)
+        while not self.status['Stop']:
+            time.sleep(0.2)
+        print("Trying to terminate the processes nicely")
+        print('terminating player_proc')
+        self.cmds['player_proc'].terminate()
+        if not self.status['using_server']:
+            if self.status['use_rds']:
+                print('terminating redsea_proc')
+                self.cmds['redsea_proc'].terminate()
+            #print('terminating demux_proc')
+            #self.cmds['demux_proc'].terminate()
+            print('terminating rtl_fm_proc')
+            self.cmds['rtl_fm_proc'].terminate()
+        print('killing player_proc')
+        self.cmds['player_proc'].kill()
+        if not self.status['using_server']:
+            if self.status['use_rds']:
+                print('killing redsea_proc')
+                self.cmds['redsea_proc'].kill()
+            #print('killing demux_proc')
+            #self.cmds['demux_proc'].kill()
+            print('killing rtl_fm_proc')
+            self.cmds['rtl_fm_proc'].kill()
+        print('setting procs to None')
+        self.cmds['player_proc'] = None
+        self.cmds['redsea_proc'] = None
+        self.cmds['demux_proc'] = None
+        self.cmds['rtl_fm_proc'] = None
+        print('play() Stop: %s' % self.status['Stop'])
 
     def start(self, frequency):
         """Start playing a given frequency"""
         preset_list = self.player_gui.get_preset_list()
         if self.status['Stop']:
             print('starting play_thread')
+            rtl_fm_cmd = None
+            redsea_cmd = None
+            player_cmd = None
             if self.status['using_server']:
                 freq = int(float(frequency) * 1000000)
-                p_string = self.cmds['play_string'].replace('/freq/', '/%s/' % freq)
+                player_cmd = self.cmds['player_cmd'].replace('/freq/', '/%s/' % freq)
             else:
-                self.player_gui.clear_station_data()
-                p_string = self.cmds['play_string'].replace(
+                rtl_fm_cmd = self.cmds['rtl_fm_cmd'].replace(
                     'rtl_fm', 'rtl_fm -f %sM' % frequency)
-            play_thread = threading.Thread(target=self.play, args=([p_string]))
+                redsea_cmd = self.cmds['redsea_cmd']
+                player_cmd = self.cmds['player_cmd']
+            while (self.cmds['rtl_fm_proc'] is not None
+                   or self.cmds['redsea_proc'] is not None
+                   or self.cmds['player_proc'] is not None):
+                print('waiting for procs to finish')
+                time.sleep(0.2)
+            play_thread = threading.Thread(
+                target=self._play, args=(rtl_fm_cmd, redsea_cmd, player_cmd))
             play_thread.daemon = True
             play_thread.start()
+            self.player_gui.clear_station_data()
             if frequency in preset_list:
                 self.player_gui.set_preset_rb_var(frequency)
             else:
                 self.player_gui.set_preset_rb_var(None)
             self.status['Stop'] = False
-        else:
-            print('stopping play_thread')
-            self.status['Stop'] = True
 
     def stop(self):
         """Stop playing audio from currently tuned frequency"""
+        print('begin stop()')
         self.status['Stop'] = True
+        while (self.cmds['rtl_fm_proc'] is not None
+               or self.cmds['redsea_proc'] is not None
+               or self.cmds['player_proc'] is not None):
+            print('waiting for procs to finish')
+            time.sleep(0.2)
+        print('stop() Stop: %s' % self.status['Stop'])
 
     def mute(self):
         """Toggle muting the volume"""
@@ -319,61 +171,72 @@ class PlayerApp:
             self.status['Muted'] = False
         else:
             self.status['Muted'] = True
-        subprocess.run(['amixer', '-q', '-D', 'pulse', 'sset', 'Master', 'toggle'])
+        cmd_list = self.cmds['vol_mute_cmd'].split()
+        subprocess.run(cmd_list)
 
     def vol_up(self):
         """Turn up volume"""
+        if self.player_gui.get_vol_timer() is not None:
+            self.player_gui.get_vol_timer().cancel()
         cmd_list = self.cmds['vol_up_cmd'].split()
         subprocess.run(cmd_list)
+        self.player_gui.show_vol_lvl()
+        self.player_gui.data['vol_lvl'].set(self.get_vol_level())
+        self.player_gui.start_vol_timer()
 
     def vol_down(self):
         """Turn down volume"""
+        if self.player_gui.get_vol_timer() is not None:
+            self.player_gui.get_vol_timer().cancel()
         cmd_list = self.cmds['vol_down_cmd'].split()
         subprocess.run(cmd_list)
+        self.player_gui.show_vol_lvl()
+        self.player_gui.data['vol_lvl'].set(self.get_vol_level())
+        self.player_gui.start_vol_timer()
 
     def next_station(self):
         """Switch to next preset station/frequency"""
         if not self.status['using_server']:
             self.stop()
-        if self.current_freq in self.frequencies:
-            curr_freq = self.frequencies.index(self.current_freq)
+        if self.status['current_freq'] in self.frequencies:
+            curr_freq = self.frequencies.index(self.status['current_freq'])
             if self.frequencies[curr_freq] == self.frequencies[-1]:
-                self.current_freq = self.frequencies[0]
+                self.status['current_freq'] = self.frequencies[0]
             else:
-                self.current_freq = self.frequencies[curr_freq + 1]
+                self.status['current_freq'] = self.frequencies[curr_freq + 1]
         else:
-            freq_list = [i for i in self.frequencies if i > self.current_freq]
+            freq_list = [i for i in self.frequencies if i > self.status['current_freq']]
             if freq_list:
-                self.current_freq = freq_list[0]
+                self.status['current_freq'] = freq_list[0]
             else:
-                self.current_freq = self.frequencies[0]
+                self.status['current_freq'] = self.frequencies[0]
         if self.status['using_server']:
-            self.api_set_frequency(self.current_freq)
+            self._api_set_frequency(self.status['current_freq'])
         else:
             time.sleep(1)
-            self.start(self.current_freq)
+            self.start(self.status['current_freq'])
 
     def previous_station(self):
         """Switch to previous preset station/frequency"""
         if not self.status['using_server']:
             self.stop()
-        if self.current_freq in self.frequencies:
-            curr_freq = self.frequencies.index(self.current_freq)
+        if self.status['current_freq'] in self.frequencies:
+            curr_freq = self.frequencies.index(self.status['current_freq'])
             if self.frequencies[curr_freq] == self.frequencies[0]:
-                self.current_freq = self.frequencies[-1]
+                self.status['current_freq'] = self.frequencies[-1]
             else:
-                self.current_freq = self.frequencies[curr_freq - 1]
+                self.status['current_freq'] = self.frequencies[curr_freq - 1]
         else:
-            freq_list = [i for i in self.frequencies if i < self.current_freq]
+            freq_list = [i for i in self.frequencies if i < self.status['current_freq']]
             if freq_list:
-                self.current_freq = freq_list[0]
+                self.status['current_freq'] = freq_list[0]
             else:
-                self.current_freq = self.frequencies[-1]
+                self.status['current_freq'] = self.frequencies[-1]
         if self.status['using_server']:
-            self.api_set_frequency(self.current_freq)
+            self._api_set_frequency(self.status['current_freq'])
         else:
             time.sleep(1)
-            self.start(self.current_freq)
+            self.start(self.status['current_freq'])
 
     def select_preset(self, freq, pbn):
         """Switch to given preset station/frequency"""
@@ -383,12 +246,12 @@ class PlayerApp:
             return
         if not self.status['using_server']:
             self.stop()
-        self.current_freq = freq
+        self.status['current_freq'] = freq
         if self.status['using_server']:
-            self.api_set_frequency(self.current_freq)
+            self._api_set_frequency(self.status['current_freq'])
         else:
             time.sleep(1)
-            self.start(self.current_freq)
+            self.start(self.status['current_freq'])
 
     def save_preset(self, freq, pbn):
         """Switch to given preset station/frequency"""
@@ -397,17 +260,18 @@ class PlayerApp:
             self.player_gui.set_preset_rb_var(self.get_current_freq())
             return
         master = self.player_gui.get_tk_root()
-        master.nametowidget(pbn).config(text=self.current_freq, value=pbn + self.current_freq)
+        master.nametowidget(pbn).config(
+            text=self.status['current_freq'], value=pbn + self.status['current_freq'])
         master.nametowidget(pbn).set_short_press_cmd(
-            lambda s=self.current_freq, pb=pbn: self.select_preset(s, pb))
+            lambda s=self.status['current_freq'], pb=pbn: self.select_preset(s, pb))
         master.nametowidget(pbn).set_long_press_cmd(
-            lambda s=self.current_freq, pb=pbn: self.save_preset(s, pb))
+            lambda s=self.status['current_freq'], pb=pbn: self.save_preset(s, pb))
         self.player_gui.set_preset_rb_var(self.get_current_freq(), pbn)
         preset_list = []
         for num in range(1, 9):
             preset_list.append(master.nametowidget('pb' + str(num)).cget('text'))
         self.player_gui.set_preset_list(preset_list)
-        update_stations(preset_list)
+        self.settings.update_stations(preset_list)
         self.frequencies = preset_list
 
     def manual_tune(self, direction='down'):
@@ -417,10 +281,10 @@ class PlayerApp:
                 self.stop()
         self.status['Tuning'] = 'started'
         if direction == 'up':
-            self.current_freq = str(round((float(self.current_freq) + 0.1), 1))
+            self.status['current_freq'] = str(round((float(self.status['current_freq']) + 0.1), 1))
         else:
-            self.current_freq = str(round((float(self.current_freq) - 0.1), 1))
-        print('Tuning %s' % self.current_freq)
+            self.status['current_freq'] = str(round((float(self.status['current_freq']) - 0.1), 1))
+        print('Tuning %s' % self.status['current_freq'])
 
     def tuning_stop(self):
         """Stop tuning"""
@@ -430,21 +294,20 @@ class PlayerApp:
         """Finish tuning to currently set frequency"""
         if self.status['Tuning'] == 'stopped':
             if self.status['using_server']:
-                self.api_set_frequency(self.current_freq)
+                self._api_set_frequency(self.status['current_freq'])
             else:
-                self.start(self.current_freq)
+                self.start(self.status['current_freq'])
             self.status['Tuning'] = 'finished'
-            print('Tuning to %s' % self.current_freq)
+            print('Tuning to %s' % self.status['current_freq'])
         master = self.player_gui.get_tk_root()
         master.after(200, self.tune)
 
     def power_off(self):
         """Exit the application"""
         self.stop()
-        subprocess.call('rm -r ' + self.temp_dir, shell=True)
         time.sleep(1)
-        save_session(self.current_freq)
-        write_config()
+        self.settings.save_session(self.status['current_freq'])
+        self.settings.write_config()
         if self.status['using_server']:
             subprocess.run(['killall', 'rtl_fm_streamer'])
         master = self.player_gui.get_tk_root()
@@ -453,12 +316,12 @@ class PlayerApp:
     def _api_make_request(self, payload):
         """Make a request via rtl_fm_streamer API"""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as soc:
-            soc.connect((self.api['host'], int(self.api['api_host'])))
+            soc.connect((self.api['host'], int(self.api['api_port'])))
             soc.sendall(json.dumps(payload).encode('utf-8'))
             data = soc.recv(1024)
             return data
 
-    def api_set_frequency(self, frequency):
+    def _api_set_frequency(self, frequency):
         """Set frequency using rtl_fm_streamer API"""
         preset_list = self.player_gui.get_preset_list()
         freq = int(float(frequency) * 1000000)
@@ -470,7 +333,7 @@ class PlayerApp:
         else:
             self.player_gui.set_preset_rb_var(None)
 
-    def api_get_power_level(self):
+    def _api_get_power_level(self):
         """Get power level in dBFS from rtl_fm_streamer API"""
         power_level = None
         payload = {"method": "GetPowerLevel"}
@@ -484,36 +347,36 @@ class PlayerApp:
         """Automatically scan up or down frequencies based on signal power level"""
         if self.status['Stop']:
             return
-        power_level = self.api_get_power_level()
+        power_level = self._api_get_power_level()
         station = False
-        freq = float(self.current_freq)
+        freq = float(self.status['current_freq'])
         while int(freq) in range(86, 109):
             if direction == 'up':
                 freq = round(freq + 0.2, 1)
             else:
                 freq = round(freq - 0.2, 1)
-            self.api_set_frequency(freq)
-            self.current_freq = str(freq)
+            self._api_set_frequency(freq)
+            self.status['current_freq'] = str(freq)
             time.sleep(.2)
-            power_level = self.api_get_power_level()
+            power_level = self._api_get_power_level()
             if power_level > -15:
                 station = True
                 print('Station found %s' % freq)
                 break
         if station:
-            self.fine_tune(freq, power_level)
+            self._fine_tune(freq, power_level)
 
-    def fine_tune(self, freq, power_level):
+    def _fine_tune(self, freq, power_level):
         """Fine-tune automatically-scanned frequency"""
         pwr_lvl = power_level
         test = freq
         count = False
         while pwr_lvl >= power_level:
             test = round(test + 0.1, 1)
-            self.api_set_frequency(test)
-            self.current_freq = str(test)
+            self._api_set_frequency(test)
+            self.status['current_freq'] = str(test)
             time.sleep(0.5)
-            pwr_lvl = self.api_get_power_level()
+            pwr_lvl = self._api_get_power_level()
             print('PL', pwr_lvl)
             if pwr_lvl > power_level:
                 count = True
@@ -521,17 +384,17 @@ class PlayerApp:
             else:
                 if count:
                     freq = round(test - 0.1, 1)
-                    self.api_set_frequency(freq)
-                    self.current_freq = str(freq)
+                    self._api_set_frequency(freq)
+                    self.status['current_freq'] = str(freq)
         if not count:
             pwr_lvl = power_level
             test = freq
             while pwr_lvl >= power_level:
                 test = round(test - 0.1, 1)
-                self.api_set_frequency(test)
-                self.current_freq = str(test)
+                self._api_set_frequency(test)
+                self.status['current_freq'] = str(test)
                 time.sleep(0.5)
-                pwr_lvl = self.api_get_power_level()
+                pwr_lvl = self._api_get_power_level()
                 print('PL', pwr_lvl)
                 if pwr_lvl > power_level:
                     count = True
@@ -539,19 +402,33 @@ class PlayerApp:
                 else:
                     if count:
                         freq = round(test + 0.1, 1)
-                        self.api_set_frequency(freq)
-                        self.current_freq = str(freq)
+                        self._api_set_frequency(freq)
+                        self.status['current_freq'] = str(freq)
             if not count:
-                self.api_set_frequency(freq)
-                self.current_freq = str(freq)
+                self._api_set_frequency(freq)
+                self.status['current_freq'] = str(freq)
 
     def get_current_freq(self):
         """Return current frequency"""
-        return self.current_freq
+        return self.status['current_freq']
 
     def get_using_server(self):
         """Return whether or not the server is being used"""
         return self.status['using_server']
+
+    def get_use_rds(self):
+        """Return whether or not rds is being used"""
+        return self.status['use_rds']
+
+    def get_rds_deque(self):
+        """Return RDS Deque"""
+        return self.rds_deque
+
+    def get_vol_level(self):
+        """Returns volume level (0-100) from amixer"""
+        cmd_list = self.cmds['get_vol_cmd'].split()
+        output = subprocess.check_output(cmd_list).decode('utf-8')
+        return int(output[(output.find('[') + 1):output.find('%]', (output.find('[') + 1))])
 
     def set_player_gui(self, gui_instance):
         """Set player GUI instance"""
@@ -563,7 +440,7 @@ class PlayerGUI:
     def __init__(self, master, app, stns, extra_args=None):
         if extra_args is None:
             extra_args = {'freq_list': [], 'bg_color': 'gray11', 'fnt_color': 'white',
-                          'btn_color': 'black', 'ico_path': None, 'rds_log': None}
+                          'btn_color': 'black', 'btn_brdr_color': 'black', 'ico_path': None}
         self.master = master
         self.app = app
         self.data = {
@@ -571,12 +448,15 @@ class PlayerGUI:
             'freq_list': extra_args['freq_list'],
             'preset_list': [],
             'preset_rb_var': None,
-            'radio_text': ''}
+            'vol_lvl': tk.IntVar(),
+            'radio_text': '',
+            'call_sign': '',
+            'program_service': ''}
         self.colors = {'bg_color': extra_args['bg_color'],
                        'fnt_color': extra_args['fnt_color'],
-                       'btn_color': extra_args['btn_color']}
-        self.paths = {'ico_path': extra_args['ico_path'],
-                      'rds_log': extra_args['rds_log']}
+                       'btn_color': extra_args['btn_color'],
+                       'btn_brdr_color': extra_args['btn_brdr_color'],
+                       'ico_path': extra_args['ico_path']}
         self.imgs = {
             'bg_img': None, 'play_img': None, 'stop_img': None,
             'power_img': None, 'back_img': None, 'vol_down_img': None,
@@ -584,13 +464,14 @@ class PlayerGUI:
             'prev_img': None, 'next_img': None, 'tune_down_img': None,
             'tune_up_img': None, 'scan_down_img': None, 'scan_up_img': None}
         self.widgets = {
-            'canvas': None, 'freq_text': None, 'freq_unit': None,
-            'rt_label': None, 'rt_marquee': None, 'clock': None,
+            'canvas': None, 'freq_text': None, 'freq_unit': None, 'cs_label': None,
+            'ps_label': None, 'rt_label': None, 'rt_marquee': None, 'clock': None,
             'cpu_text': None, 'play_btn': None, 'power_btn': None,
             'back_btn': None, 'vol_down_btn': None, 'vol_up_btn': None,
             'vol_mute_btn': None, 'previous_btn': None, 'next_btn': None,
             'tune_down_btn': None, 'tune_up_btn': None, 'scan_down_btn': None,
-            'scan_up_btn': None}
+            'scan_up_btn': None, 'vol_lvl': None}
+        self.vol_timer = None
 
         self.master.title("RTL-SDR FM Player")
 
@@ -611,6 +492,17 @@ class PlayerGUI:
         self.imgs['bg_img'] = tk.PhotoImage(file=app_res_path('background.png'))
         self.widgets['canvas'].create_image(400, 240, image=self.imgs['bg_img'])
 
+        style = ttk.Style()
+        style.configure(
+            'Horizontal.TProgressbar', background='#F5B42A', troughcolor='#000000',
+            borderwidth=1, troughrelief='flat', pbarrelief='flat')
+        self.data['vol_lvl'].set(self.app.get_vol_level())
+        self.widgets['vol_lvl'] = ttk.Progressbar(
+            self.master, orient=tk.HORIZONTAL, length=400,
+            mode='determinate', variable=self.data['vol_lvl'])
+        self.widgets['vol_lvl'].place(relx=0.5, rely=0.5, x=0, y=0, anchor=tk.CENTER)
+        self.widgets['vol_lvl'].lower()
+
         self._create_texts()
         self.create_presets(self.data['freq_list'])
         self._create_buttons()
@@ -619,7 +511,8 @@ class PlayerGUI:
         self._update_play_button()
         self._update_vol_button()
         self.clear_station_data()
-        self._update_station_data()
+        self._update_rds_rt()
+        self._update_rds_ps()
 
     def _create_texts(self):
         """Create text elements"""
@@ -642,6 +535,24 @@ class PlayerGUI:
             padx=0, pady=25, text='MHz')
         self.widgets['freq_unit'].config(justify='left', fg=self.colors['fnt_color'])
         self.widgets['freq_unit'].place(relx=1, rely=1, x=-20, y=-104, anchor=tk.SE)
+
+        self.widgets['cs_label'] = tk.Label(
+            self.master, font=("Quicksand Medium", 12, 'bold'),
+            fg=self.colors['fnt_color'], bg=self.colors['bg_color'], text='')
+        self.widgets['cs_label'].config(
+            anchor=tk.CENTER, width=6, wraplength=0, fg=self.colors['fnt_color'],
+            highlightthickness=1, highlightcolor=self.colors['bg_color'],
+            highlightbackground=self.colors['bg_color'])
+        self.widgets['cs_label'].place(relx=1, rely=1, x=-20, y=-214, anchor=tk.SE)
+
+        self.widgets['ps_label'] = tk.Label(
+            self.master, font=("Quicksand Medium", 12, 'bold'),
+            fg=self.colors['fnt_color'], bg=self.colors['bg_color'], text='')
+        self.widgets['ps_label'].config(
+            anchor=tk.CENTER, width=27, wraplength=0, fg=self.colors['fnt_color'],
+            highlightthickness=1, highlightcolor=self.colors['bg_color'],
+            highlightbackground=self.colors['bg_color'])
+        self.widgets['ps_label'].place(relx=1, rely=1, x=-94, y=-320, anchor=tk.SE)
 
         self.widgets['rt_label'] = tk.Label(
             self.master, font=("Quicksand Medium", 12, 'bold'),
@@ -709,9 +620,9 @@ class PlayerGUI:
     def _create_buttons(self):
         """Create main custom buttons """
         self.imgs['play_img'] = tk.PhotoImage(
-            file='%splay_64x64.png' % self.paths['ico_path'])
+            file='%splay_64x64.png' % self.colors['ico_path'])
         self.imgs['stop_img'] = tk.PhotoImage(
-            file='%sstop-circle_64x64.png' % self.paths['ico_path'])
+            file='%sstop-circle_64x64.png' % self.colors['ico_path'])
         self.widgets['play_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -723,7 +634,7 @@ class PlayerGUI:
         self.widgets['play_btn'].place(relx=0.5, rely=1, x=0, y=-20, anchor=tk.S)
 
         self.imgs['power_img'] = tk.PhotoImage(
-            file='%spower_64x64.png' % self.paths['ico_path'])
+            file='%spower_64x64.png' % self.colors['ico_path'])
         self.widgets['power_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -735,7 +646,7 @@ class PlayerGUI:
         self.widgets['power_btn'].place(relx=1, rely=1, x=-20, y=-20, anchor=tk.SE)
 
         self.imgs['back_img'] = tk.PhotoImage(
-            file='%sarrow-left-circle_64x64.png' % self.paths['ico_path'])
+            file='%sarrow-left-circle_64x64.png' % self.colors['ico_path'])
         self.widgets['back_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -747,7 +658,7 @@ class PlayerGUI:
         self.widgets['back_btn'].place(relx=0, rely=1, x=20, y=-20, anchor=tk.SW)
 
         self.imgs['vol_up_img'] = tk.PhotoImage(
-            file='%schevron-up_64x64.png' % self.paths['ico_path'])
+            file='%schevron-up_64x64.png' % self.colors['ico_path'])
         self.widgets['vol_up_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -755,13 +666,15 @@ class PlayerGUI:
                 'color': self.colors['btn_color'],
                 'bg': self.colors['bg_color'],
                 'image': self.imgs['vol_up_img'],
-                'release_command': self.app.vol_up})
+                'press_command': self.app.vol_up,
+                'repeatdelay': 100,
+                'repeatinterval': 25})
         self.widgets['vol_up_btn'].place(relx=0, rely=0.5, x=20, y=-74, anchor=tk.W)
 
         self.imgs['vol_unmuted_img'] = tk.PhotoImage(
-            file='%svolume-2_64x64.png' % self.paths['ico_path'])
+            file='%svolume-2_64x64.png' % self.colors['ico_path'])
         self.imgs['vol_muted_img'] = tk.PhotoImage(
-            file='%svolume-x_64x64.png' % self.paths['ico_path'])
+            file='%svolume-x_64x64.png' % self.colors['ico_path'])
         self.widgets['vol_mute_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -773,7 +686,7 @@ class PlayerGUI:
         self.widgets['vol_mute_btn'].place(relx=0, rely=0.5, x=20, y=0, anchor=tk.W)
 
         self.imgs['vol_down_img'] = tk.PhotoImage(
-            file='%schevron-down_64x64.png' % self.paths['ico_path'])
+            file='%schevron-down_64x64.png' % self.colors['ico_path'])
         self.widgets['vol_down_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -781,11 +694,13 @@ class PlayerGUI:
                 'color': self.colors['btn_color'],
                 'bg': self.colors['bg_color'],
                 'image': self.imgs['vol_down_img'],
-                'release_command': self.app.vol_down})
+                'press_command': self.app.vol_down,
+                'repeatdelay': 100,
+                'repeatinterval': 25})
         self.widgets['vol_down_btn'].place(relx=0, rely=0.5, x=20, y=74, anchor=tk.W)
 
         self.imgs['prev_img'] = tk.PhotoImage(
-            file='%sskip-back_64x64.png' % self.paths['ico_path'])
+            file='%sskip-back_64x64.png' % self.colors['ico_path'])
         self.widgets['previous_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -797,7 +712,7 @@ class PlayerGUI:
         self.widgets['previous_btn'].place(relx=0.5, rely=1, x=-74, y=-20, anchor=tk.S)
 
         self.imgs['next_img'] = tk.PhotoImage(
-            file='%sskip-forward_64x64.png' % self.paths['ico_path'])
+            file='%sskip-forward_64x64.png' % self.colors['ico_path'])
         self.widgets['next_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -809,7 +724,7 @@ class PlayerGUI:
         self.widgets['next_btn'].place(relx=0.5, rely=1, x=74, y=-20, anchor=tk.S)
 
         self.imgs['tune_down_img'] = tk.PhotoImage(
-            file='%schevron-left_64x64.png' % self.paths['ico_path'])
+            file='%schevron-left_64x64.png' % self.colors['ico_path'])
         self.widgets['tune_down_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -819,12 +734,12 @@ class PlayerGUI:
                 'image': self.imgs['tune_down_img'],
                 'press_command': self.app.manual_tune,
                 'release_command': self.app.tuning_stop,
-                'repeatdelay': 100,
-                'repeatinterval': 200})
+                'repeatdelay': 200,
+                'repeatinterval': 400})
         self.widgets['tune_down_btn'].place(relx=0.5, rely=1, x=-148, y=-20, anchor=tk.S)
 
         self.imgs['tune_up_img'] = tk.PhotoImage(
-            file='%schevron-right_64x64.png' % self.paths['ico_path'])
+            file='%schevron-right_64x64.png' % self.colors['ico_path'])
         self.widgets['tune_up_btn'] = RoundedButton(
             self.master, args={
                 'width': 64, 'height': 64,
@@ -834,13 +749,13 @@ class PlayerGUI:
                 'image': self.imgs['tune_up_img'],
                 'press_command': lambda d='up': self.app.manual_tune(d),
                 'release_command': self.app.tuning_stop,
-                'repeatdelay': 100,
-                'repeatinterval': 200})
+                'repeatdelay': 200,
+                'repeatinterval': 400})
         self.widgets['tune_up_btn'].place(relx=0.5, rely=1, x=148, y=-20, anchor=tk.S)
 
         if self.app.get_using_server():
             self.imgs['scan_down_img'] = tk.PhotoImage(
-                file='%schevrons-left_64x64.png' % self.paths['ico_path'])
+                file='%schevrons-left_64x64.png' % self.colors['ico_path'])
             self.widgets['scan_down_btn'] = RoundedButton(
                 self.master, args={
                     'width': 64, 'height': 64,
@@ -852,7 +767,7 @@ class PlayerGUI:
             self.widgets['scan_down_btn'].place(relx=0.5, rely=1, x=-222, y=-20, anchor=tk.S)
 
             self.imgs['scan_up_img'] = tk.PhotoImage(
-                file='%schevrons-right_64x64.png' % self.paths['ico_path'])
+                file='%schevrons-right_64x64.png' % self.colors['ico_path'])
             self.widgets['scan_up_btn'] = RoundedButton(
                 self.master, args={
                     'width': 64, 'height': 64,
@@ -876,9 +791,12 @@ class PlayerGUI:
         """Swap play and stop icons"""
         if self.app.status['Stop']:
             button_img = self.imgs['play_img']
+            command = lambda: self.app.start(self.app.get_current_freq())
         else:
             button_img = self.imgs['stop_img']
+            command = self.app.stop
         self.widgets['play_btn'].update_image(button_img)
+        self.widgets['play_btn'].update_release_command(command)
         self.widgets['play_btn'].after(200, self._update_play_button)
 
     def _update_vol_button(self):
@@ -894,35 +812,78 @@ class PlayerGUI:
         """Clear out displayed Radio Text"""
         self.data['radio_text'] = ''
         self.widgets['rt_marquee'].update_text(new_text='')
+        self.data['program_service'] = ''
+        self.widgets['ps_label'].config(text='')
+        self.data['call_sign'] = ''
+        self.widgets['cs_label'].config(text='')
 
-    def _update_station_data(self):
-        """Update displayed Radio Text from RDS"""
-        if not self.app.get_using_server() and use_rds:
+    def _update_rds_rt(self):
+        """Update displayed RDS Radio Text"""
+        if not self.app.get_using_server() and self.app.get_use_rds():
             previous_rt = self.data['radio_text']
+            previous_cs = self.data['call_sign']
+            rds_rt_data = None
             rds_rt_json_list = []
-            with open(self.paths['rds_log'], 'r') as rdslf:
-                for line in rdslf:
-                    if '"radiotext"' in line:
-                        rds_rt_json_list.append(line)
+            rdslf = self.app.get_rds_deque()
+            for line in rdslf:
+                if '"radiotext"' in line.decode('utf-8'):
+                    rds_rt_json_list.append(line.decode('utf-8').strip())
             if len(rds_rt_json_list) > 0:
                 rds_rt_json = rds_rt_json_list[-1]
-                print(rds_rt_json)
-                rds_rt_data = json.loads(rds_rt_json)
-                self.data['radio_text'] = rds_rt_data[u'radiotext'].strip()
+                #print(rds_rt_json)
+                if rds_rt_json is not None and rds_rt_json != '':
+                    try:
+                        rds_rt_data = json.loads(rds_rt_json)
+                    except json.decoder.JSONDecodeError as exc:
+                        print('JSONDecodeError!')
+                        print(rds_rt_json)
+                        print(exc)
+                if rds_rt_data:
+                    self.data['radio_text'] = rds_rt_data[u'radiotext'].strip()
+                    if 'callsign' in rds_rt_data:
+                        self.data['call_sign'] = rds_rt_data[u'callsign'].strip()
             if self.data['radio_text'] != previous_rt:
                 self.widgets['rt_marquee'].update_text(new_text='%s' % self.data['radio_text'])
-            with open(self.paths['rds_log']) as rdslf:
-                last_500 = deque(rdslf, 500)
-            with open(self.paths['rds_log'], 'w') as rdslf:
-                for line in last_500:
-                    rdslf.write(line)
+            if self.data['call_sign'] != previous_cs:
+                self.widgets['cs_label'].config(text=self.data['call_sign'])
         else:
             if self.app.get_current_freq() in self.data['stations']:
                 self.widgets['rt_marquee'].update_text(
                     new_text='%s' % self.data['stations'][self.app.get_current_freq()])
             else:
                 self.widgets['rt_marquee'].update_text(new_text='%s' % self.app.get_current_freq())
-        self.widgets['rt_marquee'].after(5000, self._update_station_data)
+        self.widgets['rt_marquee'].after(1000, self._update_rds_rt)
+
+    def _update_rds_ps(self):
+        """Update displayed RDS Program Service name text"""
+        if not self.app.get_using_server() and self.app.get_use_rds():
+            previous_ps = self.data['program_service']
+            previous_cs = self.data['call_sign']
+            rds_ps_data = None
+            rds_ps_json_list = []
+            rdslf = self.app.get_rds_deque()
+            for line in rdslf:
+                if '"ps"' in line.decode('utf-8'):
+                    rds_ps_json_list.append(line.decode('utf-8').strip())
+            if len(rds_ps_json_list) > 0:
+                rds_ps_json = rds_ps_json_list[-1]
+                #print(rds_ps_json)
+                if rds_ps_json is not None and rds_ps_json != '':
+                    try:
+                        rds_ps_data = json.loads(rds_ps_json)
+                    except json.decoder.JSONDecodeError as exc:
+                        print('JSONDecodeError!')
+                        print(rds_ps_json)
+                        print(exc)
+                if rds_ps_data:
+                    self.data['program_service'] = rds_ps_data[u'ps'].strip()
+                    if 'callsign' in rds_ps_data:
+                        self.data['call_sign'] = rds_ps_data[u'callsign'].strip()
+            if self.data['program_service'] != previous_ps:
+                self.widgets['ps_label'].config(text=self.data['program_service'])
+            if self.data['call_sign'] != previous_cs:
+                self.widgets['cs_label'].config(text=self.data['call_sign'])
+        self.widgets['ps_label'].after(500, self._update_rds_ps)
 
     def _tick(self):
         """Update displayed time"""
@@ -932,6 +893,15 @@ class PlayerGUI:
             self.widgets['clock'].config(text=time_now.lstrip('0'))
         self.widgets['clock'].after(200, self._tick)
 
+    def show_vol_lvl(self):
+        """Show volume bar"""
+        self.widgets['vol_lvl'].lift()
+
+    def hide_vol_lvl(self):
+        """Hide volume bar"""
+        self.widgets['vol_lvl'].lower()
+        self.vol_timer = None
+
     def get_tk_root(self):
         """Return tkinter root element"""
         return self.master
@@ -939,6 +909,15 @@ class PlayerGUI:
     def get_cpu_text_label(self):
         """Return CPU text label"""
         return self.widgets['cpu_text']
+
+    def get_vol_timer(self):
+        """Return volume timer"""
+        return self.vol_timer
+
+    def start_vol_timer(self):
+        """Set volume timer"""
+        self.vol_timer = threading.Timer(2, self.hide_vol_lvl)
+        self.vol_timer.start()
 
     def get_preset_list(self):
         """Return preset list"""
@@ -963,31 +942,34 @@ class PlayerGUI:
 def main():
     """Main application"""
     setproctitle('rtl_sdr_fm_player')
-    temp_directory = subprocess.check_output(
-        'tempdir=$(mktemp -dt "rtl_sdr_fm_player.XXXXXXXX"'
-        + ' --tmpdir=/run/user/$(id -u));echo -n $tempdir',
-        shell=True).decode('utf-8')
-    rds_log_path = subprocess.check_output(
-        'tempfile=$(mktemp -t "rds.XXXXXXXX" --tmpdir='
-        + temp_directory + ');echo -n $tempfile',
-        shell=True).decode('utf-8')
-    if start_server:
-        subprocess.Popen(['rtl_fm_streamer', '-P', port])
-    global play_string
-    if use_rds:
-        play_string = play_string.replace('rds_log_path', rds_log_path)
+    settings = Settings()
+    player_settings = settings.get_settings()
+    if player_settings['start_server']:
+        subprocess.Popen(['rtl_fm_streamer', '-P', player_settings['port']])
     root = tk.Tk()
     player_app = PlayerApp(
-        frequencies, current_frequency,
-        extra_args={'temp_dir': temp_directory, 'play_str': play_string,
-                    'vol_down_cmd': volume_down_command,
-                    'vol_up_cmd': volume_up_command,
-                    'hst': host, 'api_prt': api_port, 'use_srv': use_server})
+        settings,
+        extra_args={'freq_list': player_settings['frequencies'],
+                    'current_freq': player_settings['current_frequency'],
+                    'rtl_fm_cmd': player_settings['rtl_fm_command'],
+                    'redsea_cmd': player_settings['redsea_command'],
+                    'player_cmd': player_settings['player_command'],
+                    'vol_down_cmd': player_settings['volume_down_command'],
+                    'vol_up_cmd': player_settings['volume_up_command'],
+                    'vol_mute_cmd': player_settings['volume_mute_command'],
+                    'get_vol_cmd': player_settings['get_volume_command'],
+                    'hst': player_settings['host'],
+                    'api_prt': player_settings['api_port'],
+                    'use_srv': player_settings['use_server'],
+                    'use_rds': player_settings['use_rds']})
     player_gui = PlayerGUI(
-        root, player_app, stations,
-        extra_args={'freq_list': frequencies, 'bg_color': background_color,
-                    'fnt_color': font_color, 'btn_color': button_color,
-                    'ico_path': icon_path, 'rds_log': rds_log_path})
+        root, player_app, player_settings['stations'],
+        extra_args={'freq_list': player_settings['frequencies'],
+                    'bg_color': player_settings['background_color'],
+                    'fnt_color': player_settings['font_color'],
+                    'btn_color': player_settings['button_color'],
+                    'btn_brdr_color': player_settings['button_border_color'],
+                    'ico_path': player_settings['icon_path']})
     player_app.set_player_gui(player_gui)
     player_app.tune()
     cpu_info = CPUInfo(player_gui.get_cpu_text_label())

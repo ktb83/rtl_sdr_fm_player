@@ -1,5 +1,5 @@
 #!/bin/sh
-# Check if rtl_sdr_fm_player is running
+#  Check if rtl_sdr_fm_player is running
 if [ "$(pidof rtl_sdr_fm_player)" ]
 then
   # If it is running, then switch to the rtl_sdr_fm_player window
